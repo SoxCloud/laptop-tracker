@@ -5,15 +5,22 @@ const SPREADSHEET_ID =
   "1yLaSB7-pPgSaOeNmahl4Vd8EgfW6YI29tV-I5kRuwxU";
 const CONFIGURED_TAB = process.env.GOOGLE_SHEET_TAB || "";
 
+function getCredentialsJSON(): string | null {
+  if (process.env.GOOGLE_CREDENTIALS_BASE64) {
+    return Buffer.from(process.env.GOOGLE_CREDENTIALS_BASE64, "base64").toString("utf8");
+  }
+  return process.env.GOOGLE_SERVICE_ACCOUNT_KEY || null;
+}
+
 export function isConfigured(): boolean {
   return !!(
-    process.env.GOOGLE_SERVICE_ACCOUNT_KEY ||
+    getCredentialsJSON() ||
     process.env.GOOGLE_SERVICE_ACCOUNT_FILE
   );
 }
 
 export function getConfigError(): string | null {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  const raw = getCredentialsJSON();
   if (!raw && !process.env.GOOGLE_SERVICE_ACCOUNT_FILE) {
     return "GOOGLE_SERVICE_ACCOUNT_KEY not set in .env";
   }
@@ -33,8 +40,9 @@ function getAuth() {
   const err = getConfigError();
   if (err) throw new Error(err);
 
-  if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
-    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
+  const raw = getCredentialsJSON();
+  if (raw) {
+    const credentials = JSON.parse(raw);
     return new google.auth.GoogleAuth({
       credentials,
       scopes: ["https://www.googleapis.com/auth/spreadsheets"],
