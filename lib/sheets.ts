@@ -5,7 +5,34 @@ const SPREADSHEET_ID =
   "1yLaSB7-pPgSaOeNmahl4Vd8EgfW6YI29tV-I5kRuwxU";
 const CONFIGURED_TAB = process.env.GOOGLE_SHEET_TAB || "";
 
+export function isConfigured(): boolean {
+  return !!(
+    process.env.GOOGLE_SERVICE_ACCOUNT_KEY ||
+    process.env.GOOGLE_SERVICE_ACCOUNT_FILE
+  );
+}
+
+export function getConfigError(): string | null {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  if (!raw && !process.env.GOOGLE_SERVICE_ACCOUNT_FILE) {
+    return "GOOGLE_SERVICE_ACCOUNT_KEY not set in .env";
+  }
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed.client_email) return "Missing client_email in service account key";
+      if (!parsed.private_key) return "Missing private_key in service account key";
+    } catch {
+      return "GOOGLE_SERVICE_ACCOUNT_KEY is not valid JSON";
+    }
+  }
+  return null;
+}
+
 function getAuth() {
+  const err = getConfigError();
+  if (err) throw new Error(err);
+
   if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
     const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
     return new google.auth.GoogleAuth({
@@ -14,8 +41,7 @@ function getAuth() {
     });
   }
   return new google.auth.GoogleAuth({
-    keyFile:
-      process.env.GOOGLE_SERVICE_ACCOUNT_FILE || "./service-account-key.json",
+    keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE!,
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
 }
@@ -94,9 +120,7 @@ export async function getAllRows(): Promise<SheetRow[]> {
   return results;
 }
 
-export async function addRow(
-  data: Omit<SheetRow, "id">
-): Promise<SheetRow> {
+export async function addRow(data: Omit<SheetRow, "id">): Promise<SheetRow> {
   const sheets = await getSheets();
   const range = await tabRange("A:G");
   const response = await sheets.spreadsheets.values.append({
