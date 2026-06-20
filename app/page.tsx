@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 
 interface LaptopRepair {
   id: string;
@@ -12,10 +12,20 @@ interface LaptopRepair {
   notes: string;
 }
 
+interface LaptopProfile {
+  serial: string;
+  model: string;
+  latestDate: string;
+  latestStatus: string;
+  totalRepairs: number;
+}
+
 type SortColumn = "date" | "user" | "model" | "serial" | "issue" | "status";
 
 export default function RepairTracker() {
+  const [view, setView] = useState<"laptops" | "repairs">("laptops");
   const [repairs, setRepairs] = useState<LaptopRepair[]>([]);
+  const [allRepairs, setAllRepairs] = useState<LaptopRepair[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -47,6 +57,8 @@ export default function RepairTracker() {
     date: "", user: "", model: "", serial: "", issue: "", status: "Fixed", notes: "",
   });
 
+  const [historyLaptop, setHistoryLaptop] = useState<{ serial: string; model: string } | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -62,6 +74,7 @@ export default function RepairTracker() {
   const fetchKey = `${page}-${search}-${statusFilter}-${sortColumn}-${sortDirection}-${refreshKey}`;
 
   useEffect(() => {
+    if (view !== "repairs") return;
     let cancelled = false;
     const load = async () => {
       setLoading(true);
@@ -69,7 +82,6 @@ export default function RepairTracker() {
       const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sortColumn, sortDirection });
       if (search) params.set("search", search);
       if (statusFilter) params.set("status", statusFilter);
-
       try {
         const res = await fetch(`/api/repairs?${params}`);
         const data = await res.json();
@@ -80,7 +92,7 @@ export default function RepairTracker() {
           if (data.error) setError(data.error);
         }
       } catch {
-        if (!cancelled) setError("Failed to load repairs. Is the server running?");
+        if (!cancelled) setError("Failed to load repairs.");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -88,7 +100,59 @@ export default function RepairTracker() {
     load();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchKey]);
+  }, [fetchKey, view]);
+
+  useEffect(() => {
+    if (view !== "laptops") return;
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const res = await fetch(`/api/repairs?pageSize=1000`);
+        const data = await res.json();
+        if (!cancelled) {
+          setAllRepairs(data.repairs || []);
+          setTotal(data.total || 0);
+          setConfigured(data.configured !== false);
+          if (data.error) setError(data.error);
+        }
+      } catch {
+        if (!cancelled) setError("Failed to load laptops.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, refreshKey]);
+
+  const laptopProfiles: LaptopProfile[] = useMemo(() => {
+    const map = new Map<string, { model: string; date: string; status: string; count: number }>();
+    for (const r of allRepairs) {
+      const existing = map.get(r.serial);
+      if (!existing || r.date > existing.date) {
+        map.set(r.serial, { model: r.model, date: r.date, status: r.status, count: (existing?.count || 0) + 1 });
+      } else {
+        map.set(r.serial, { ...existing, count: existing.count + 1 });
+      }
+    }
+    return Array.from(map.entries()).map(([serial, data]) => ({
+      serial,
+      model: data.model,
+      latestDate: data.date,
+      latestStatus: data.status,
+      totalRepairs: data.count,
+    })).sort((a, b) => b.latestDate.localeCompare(a.latestDate));
+  }, [repairs]);
+
+  const historyEntries = useMemo(() => {
+    if (!historyLaptop) return [];
+    return allRepairs
+      .filter((r) => r.serial === historyLaptop.serial)
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [allRepairs, historyLaptop]);
 
   const handleSearch = () => { setPage(1); setSearch(searchInput); };
   const handleSearchKeyDown = (e: React.KeyboardEvent) => { if (e.key === "Enter") handleSearch(); };
@@ -121,6 +185,14 @@ export default function RepairTracker() {
       setPage(1);
       setRefreshKey((k) => k + 1);
     } catch { setError("Failed to add repair entry"); }
+  };
+
+  const switchView = (v: "laptops" | "repairs") => {
+    setView(v);
+    setPage(1);
+    setSearchInput("");
+    setSearch("");
+    setStatusFilter("");
   };
 
   const openEditModal = (repair: LaptopRepair) => {
@@ -180,7 +252,7 @@ export default function RepairTracker() {
       "Not Fixed": "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300",
     };
     return (
-      <span className={`px-2 py-1 rounded-full text-xs font-medium ${colors[status] || "bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300"}`}>
+      <span className={`px-2 py-1 rounded-full text-xs font-medium ${colors[status] || "bg-gray-100 dark:bg-gray-700 dark:text-gray-300"}`}>
         {status}
       </span>
     );
@@ -214,7 +286,11 @@ export default function RepairTracker() {
       <div className="max-w-7xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
           <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-100">Laptop Repair Tracker</h1>
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-2 flex-wrap items-center">
+            <div className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-1 flex">
+              <button onClick={() => switchView("laptops")} className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${view === "laptops" ? "bg-blue-600 text-white" : "text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"}`}>Laptops</button>
+              <button onClick={() => switchView("repairs")} className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${view === "repairs" ? "bg-blue-600 text-white" : "text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"}`}>All Repairs</button>
+            </div>
             <button onClick={handleExport} className="bg-green-600 text-white text-sm font-medium py-2 px-4 rounded hover:bg-green-700 transition">Export CSV</button>
             <button onClick={() => fileInputRef.current?.click()} className="bg-purple-600 text-white text-sm font-medium py-2 px-4 rounded hover:bg-purple-700 transition">Import CSV</button>
             <input ref={fileInputRef} type="file" accept=".csv" onChange={handleImport} className="hidden" />
@@ -296,64 +372,113 @@ export default function RepairTracker() {
           </div>
         </div>
 
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-x-auto">
-          <table className="min-w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-gray-100 dark:bg-gray-700 border-b-2 border-gray-200 dark:border-gray-700">
-                <Th onClick={() => handleSort("date")} active={sortColumn === "date"}>Date{sortArrow("date")}</Th>
-                <Th onClick={() => handleSort("user")} active={sortColumn === "user"}>User{sortArrow("user")}</Th>
-                <Th onClick={() => handleSort("model")} active={sortColumn === "model"}>Model{sortArrow("model")}</Th>
-                <Th onClick={() => handleSort("serial")} active={sortColumn === "serial"}>Serial Number{sortArrow("serial")}</Th>
-                <Th onClick={() => handleSort("issue")} active={sortColumn === "issue"}>Issue{sortArrow("issue")}</Th>
-                <Th onClick={() => handleSort("status")} active={sortColumn === "status"}>Status{sortArrow("status")}</Th>
-                <th className="p-4 font-semibold text-gray-700 dark:text-gray-300">Notes</th>
-                <th className="p-4 font-semibold text-gray-700 dark:text-gray-300 w-24">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={8} className="p-8 text-center text-gray-500 dark:text-gray-400">Loading...</td></tr>
-              ) : repairs.length === 0 ? (
-                <tr><td colSpan={8} className="p-8 text-center text-gray-500 dark:text-gray-400">
-                  {search || statusFilter ? "No repairs match your filters." : "No repairs logged yet. Add one above!"}
-                </td></tr>
-              ) : (
-                repairs.map((repair) => (
-                  <tr key={repair.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                    <td className="p-4 text-sm text-gray-800 dark:text-gray-200 whitespace-nowrap">{repair.date}</td>
-                    <td className="p-4 text-sm text-gray-800 dark:text-gray-200">{repair.user}</td>
-                    <td className="p-4 text-sm text-gray-800 dark:text-gray-200">{repair.model}</td>
-                    <td className="p-4 text-sm text-gray-800 dark:text-gray-200 font-mono">{repair.serial}</td>
-                    <td className="p-4 text-sm text-gray-800 dark:text-gray-200">{repair.issue}</td>
-                    <td className="p-4 text-sm">{statusBadge(repair.status)}</td>
-                    <td className="p-4 text-sm text-gray-800 dark:text-gray-200 max-w-xs truncate" title={repair.notes}>{repair.notes}</td>
-                    <td className="p-4 text-sm whitespace-nowrap">
-                      <button onClick={() => openEditModal(repair)} className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 mr-3 font-medium">Edit</button>
-                      <button onClick={() => handleDelete(repair.id)} className="text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium">Del</button>
-                    </td>
+        {view === "laptops" ? (
+          <>
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-x-auto">
+              <table className="min-w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-gray-100 dark:bg-gray-700 border-b-2 border-gray-200 dark:border-gray-700">
+                    <th className="p-4 font-semibold text-gray-700 dark:text-gray-300">Model</th>
+                    <th className="p-4 font-semibold text-gray-700 dark:text-gray-300">Serial Number</th>
+                    <th className="p-4 font-semibold text-gray-700 dark:text-gray-300">Last Repair</th>
+                    <th className="p-4 font-semibold text-gray-700 dark:text-gray-300">Latest Status</th>
+                    <th className="p-4 font-semibold text-gray-700 dark:text-gray-300">Total Repairs</th>
+                    <th className="p-4 font-semibold text-gray-700 dark:text-gray-300 w-24">History</th>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between mt-4 text-sm text-gray-600 dark:text-gray-400">
-            <span>Showing {repairs.length} of {total} entries</span>
-            <div className="flex gap-2 items-center">
-              <button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="px-3 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-700 border-gray-300 dark:border-gray-600 transition">Previous</button>
-              {Array.from({ length: totalPages }, (_, i) => i + 1)
-                .filter((p) => p === 1 || p === totalPages || Math.abs(p - page) <= 2)
-                .map((p, idx, arr) => (
-                  <React.Fragment key={p}>
-                    {idx > 0 && arr[idx - 1] !== p - 1 && <span className="px-1">...</span>}
-                    <button onClick={() => setPage(p)} className={`px-3 py-1 border rounded transition ${p === page ? "bg-blue-600 text-white" : "hover:bg-gray-100 dark:hover:bg-gray-700 border-gray-300 dark:border-gray-600"}`}>{p}</button>
-                  </React.Fragment>
-                ))}
-              <button disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} className="px-3 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-700 border-gray-300 dark:border-gray-600 transition">Next</button>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr><td colSpan={6} className="p-8 text-center text-gray-500 dark:text-gray-400">Loading...</td></tr>
+                  ) : laptopProfiles.length === 0 ? (
+                    <tr><td colSpan={6} className="p-8 text-center text-gray-500 dark:text-gray-400">No laptops found.</td></tr>
+                  ) : (
+                    laptopProfiles.map((lp) => (
+                      <tr key={lp.serial} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                        <td className="p-4 text-sm text-gray-800 dark:text-gray-200">{lp.model}</td>
+                        <td className="p-4 text-sm font-mono text-gray-800 dark:text-gray-200">{lp.serial}</td>
+                        <td className="p-4 text-sm text-gray-800 dark:text-gray-200 whitespace-nowrap">{lp.latestDate}</td>
+                        <td className="p-4 text-sm">{statusBadge(lp.latestStatus)}</td>
+                        <td className="p-4 text-sm text-gray-800 dark:text-gray-200">
+                          <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 text-xs font-bold">{lp.totalRepairs}</span>
+                        </td>
+                        <td className="p-4 text-sm">
+                          <button onClick={() => setHistoryLaptop({ serial: lp.serial, model: lp.model })} className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-medium">
+                            View
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
-          </div>
+
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-3">
+              Showing {laptopProfiles.length} laptop{laptopProfiles.length !== 1 ? "s" : ""}
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-x-auto">
+              <table className="min-w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-gray-100 dark:bg-gray-700 border-b-2 border-gray-200 dark:border-gray-700">
+                    <Th onClick={() => handleSort("date")} active={sortColumn === "date"}>Date{sortArrow("date")}</Th>
+                    <Th onClick={() => handleSort("user")} active={sortColumn === "user"}>User{sortArrow("user")}</Th>
+                    <Th onClick={() => handleSort("model")} active={sortColumn === "model"}>Model{sortArrow("model")}</Th>
+                    <Th onClick={() => handleSort("serial")} active={sortColumn === "serial"}>Serial Number{sortArrow("serial")}</Th>
+                    <Th onClick={() => handleSort("issue")} active={sortColumn === "issue"}>Issue{sortArrow("issue")}</Th>
+                    <Th onClick={() => handleSort("status")} active={sortColumn === "status"}>Status{sortArrow("status")}</Th>
+                    <th className="p-4 font-semibold text-gray-700 dark:text-gray-300">Notes</th>
+                    <th className="p-4 font-semibold text-gray-700 dark:text-gray-300 w-24">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr><td colSpan={8} className="p-8 text-center text-gray-500 dark:text-gray-400">Loading...</td></tr>
+                  ) : repairs.length === 0 ? (
+                    <tr><td colSpan={8} className="p-8 text-center text-gray-500 dark:text-gray-400">
+                      {search || statusFilter ? "No repairs match your filters." : "No repairs logged yet."}
+                    </td></tr>
+                  ) : (
+                    repairs.map((repair) => (
+                      <tr key={repair.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                        <td className="p-4 text-sm text-gray-800 dark:text-gray-200 whitespace-nowrap">{repair.date}</td>
+                        <td className="p-4 text-sm text-gray-800 dark:text-gray-200">{repair.user}</td>
+                        <td className="p-4 text-sm text-gray-800 dark:text-gray-200">{repair.model}</td>
+                        <td className="p-4 text-sm font-mono text-gray-800 dark:text-gray-200">{repair.serial}</td>
+                        <td className="p-4 text-sm text-gray-800 dark:text-gray-200">{repair.issue}</td>
+                        <td className="p-4 text-sm">{statusBadge(repair.status)}</td>
+                        <td className="p-4 text-sm text-gray-800 dark:text-gray-200 max-w-xs truncate" title={repair.notes}>{repair.notes}</td>
+                        <td className="p-4 text-sm whitespace-nowrap">
+                          <button onClick={() => openEditModal(repair)} className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 mr-3 font-medium">Edit</button>
+                          <button onClick={() => handleDelete(repair.id)} className="text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium">Del</button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between mt-4 text-sm text-gray-600 dark:text-gray-400">
+                <span>Showing {repairs.length} of {total} entries</span>
+                <div className="flex gap-2 items-center">
+                  <button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="px-3 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-700 border-gray-300 dark:border-gray-600 transition">Previous</button>
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter((p) => p === 1 || p === totalPages || Math.abs(p - page) <= 2)
+                    .map((p, idx, arr) => (
+                      <React.Fragment key={p}>
+                        {idx > 0 && arr[idx - 1] !== p - 1 && <span className="px-1">...</span>}
+                        <button onClick={() => setPage(p)} className={`px-3 py-1 border rounded transition ${p === page ? "bg-blue-600 text-white" : "hover:bg-gray-100 dark:hover:bg-gray-700 border-gray-300 dark:border-gray-600"}`}>{p}</button>
+                      </React.Fragment>
+                    ))}
+                  <button disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} className="px-3 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-700 border-gray-300 dark:border-gray-600 transition">Next</button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -389,6 +514,43 @@ export default function RepairTracker() {
                 <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition font-medium">Save Changes</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {historyLaptop && (
+        <div className="fixed inset-0 bg-black/40 dark:bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setHistoryLaptop(null)}>
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-300">Repair History &mdash; {historyLaptop.model} ({historyLaptop.serial})</h2>
+              <button onClick={() => setHistoryLaptop(null)} className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-2xl leading-none">&times;</button>
+            </div>
+            {historyEntries.length === 0 ? (
+              <p className="text-gray-500 dark:text-gray-400">No history found.</p>
+            ) : (
+              <table className="min-w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-gray-100 dark:bg-gray-700 border-b-2 border-gray-200 dark:border-gray-700">
+                    <th className="p-3 font-semibold text-gray-700 dark:text-gray-300">Date</th>
+                    <th className="p-3 font-semibold text-gray-700 dark:text-gray-300">User</th>
+                    <th className="p-3 font-semibold text-gray-700 dark:text-gray-300">Issue</th>
+                    <th className="p-3 font-semibold text-gray-700 dark:text-gray-300">Status</th>
+                    <th className="p-3 font-semibold text-gray-700 dark:text-gray-300">Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historyEntries.map((entry) => (
+                    <tr key={entry.id} className="border-b border-gray-200 dark:border-gray-700">
+                      <td className="p-3 text-sm text-gray-800 dark:text-gray-200 whitespace-nowrap">{entry.date}</td>
+                      <td className="p-3 text-sm text-gray-800 dark:text-gray-200">{entry.user}</td>
+                      <td className="p-3 text-sm text-gray-800 dark:text-gray-200">{entry.issue}</td>
+                      <td className="p-3 text-sm">{statusBadge(entry.status)}</td>
+                      <td className="p-3 text-sm text-gray-800 dark:text-gray-200">{entry.notes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}
