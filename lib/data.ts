@@ -1,5 +1,3 @@
-import { prisma } from "@/lib/prisma";
-
 export interface RepairRow {
   id: string;
   date: string;
@@ -28,7 +26,13 @@ export function getStorageMode(): "sheets" | "sqlite" {
   return googleConfigured ? "sheets" : "sqlite";
 }
 
+async function getPrisma() {
+  const mod = await import("./prisma");
+  return mod.prisma;
+}
+
 async function getAllRowsSQLite(): Promise<RepairRow[]> {
+  const prisma = await getPrisma();
   const rows = await prisma.repair.findMany({ orderBy: { createdAt: "desc" } });
   return rows.map((r) => ({
     id: r.id,
@@ -43,6 +47,7 @@ async function getAllRowsSQLite(): Promise<RepairRow[]> {
 }
 
 async function addRowSQLite(data: Omit<RepairRow, "id">): Promise<RepairRow> {
+  const prisma = await getPrisma();
   const created = await prisma.repair.create({ data });
   return { id: created.id, ...data };
 }
@@ -51,11 +56,13 @@ async function updateRowSQLite(
   id: string,
   data: Omit<RepairRow, "id">
 ): Promise<RepairRow> {
+  const prisma = await getPrisma();
   await prisma.repair.update({ where: { id }, data });
   return { id, ...data };
 }
 
 async function deleteRowSQLite(id: string): Promise<void> {
+  const prisma = await getPrisma();
   await prisma.repair.delete({ where: { id } });
 }
 
