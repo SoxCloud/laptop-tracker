@@ -54,6 +54,9 @@ export default function RepairTracker() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [storageMode, setStorageMode] = useState("");
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [importingSheet, setImportingSheet] = useState(false);
 
   const fetchKey = `${page}-${search}-${statusFilter}-${sortColumn}-${sortDirection}-${refreshKey}`;
 
@@ -73,11 +76,12 @@ export default function RepairTracker() {
 
       try {
         const res = await fetch(`/api/repairs?${params}`);
-        if (!res.ok) throw new Error("Failed to fetch");
         const data = await res.json();
         if (!cancelled) {
-          setRepairs(data.repairs);
-          setTotal(data.total);
+          setRepairs(data.repairs || []);
+          setTotal(data.total || 0);
+          if (data.storage) setStorageMode(data.storage);
+          if (data.error) setError(data.error);
         }
       } catch {
         if (!cancelled) setError("Failed to load repairs. Is the server running?");
@@ -225,6 +229,31 @@ export default function RepairTracker() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  const handleImportSheet = async () => {
+    if (!sheetUrl.trim()) return;
+    setImportingSheet(true);
+    setError("");
+    try {
+      const res = await fetch("/api/repairs/import-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: sheetUrl.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed to import from sheet");
+      } else {
+        setSheetUrl("");
+        setPage(1);
+        setRefreshKey((k) => k + 1);
+      }
+    } catch {
+      setError("Failed to import from sheet");
+    } finally {
+      setImportingSheet(false);
+    }
+  };
+
   const statusBadge = (status: string) => {
     const colors: Record<string, string> = {
       Fixed: "bg-green-100 text-green-800",
@@ -242,8 +271,15 @@ export default function RepairTracker() {
     <div className="min-h-screen bg-gray-50 p-4 md:p-8 text-slate-900">
       <div className="max-w-7xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-          <h1 className="text-3xl font-bold text-gray-800">Laptop Repair Tracker</h1>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold text-gray-800">Laptop Repair Tracker</h1>
+            {storageMode && (
+              <span className={`text-xs font-medium px-2 py-1 rounded-full ${storageMode === "sheets" ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-600"}`}>
+                {storageMode === "sheets" ? "Google Sheets" : "Local DB"}
+              </span>
+            )}
+          </div>
+          <div className="flex gap-2 flex-wrap">
             <button onClick={handleExport} className="bg-green-600 text-white text-sm font-medium py-2 px-4 rounded hover:bg-green-700 transition">
               Export CSV
             </button>
@@ -253,6 +289,37 @@ export default function RepairTracker() {
             <input ref={fileInputRef} type="file" accept=".csv" onChange={handleImport} className="hidden" />
           </div>
         </div>
+
+        {storageMode === "sqlite" && (
+          <div className="bg-white p-4 rounded-lg shadow-md mb-6 border border-blue-200">
+            <details className="group">
+              <summary className="text-sm font-semibold text-blue-700 cursor-pointer list-none flex items-center gap-2">
+                <span className="group-open:rotate-90 transition-transform">&rarr;</span>
+                Import from Google Sheet (one-time pull)
+              </summary>
+              <div className="mt-3 flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  placeholder="Paste published CSV URL here..."
+                  value={sheetUrl}
+                  onChange={(e) => setSheetUrl(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleImportSheet()}
+                  className="flex-1 border p-2 rounded bg-white text-gray-800 text-sm"
+                />
+                <button
+                  onClick={handleImportSheet}
+                  disabled={importingSheet || !sheetUrl.trim()}
+                  className="bg-blue-600 text-white text-sm font-medium py-2 px-4 rounded hover:bg-blue-700 transition disabled:opacity-40 whitespace-nowrap"
+                >
+                  {importingSheet ? "Importing..." : "Pull from Sheet"}
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                In Google Sheets: File &rarr; Share &rarr; Publish to web &rarr; select &ldquo;Comma-separated values (.csv)&rdquo; &rarr; Publish. Then paste the URL above.
+              </p>
+            </details>
+          </div>
+        )}
 
         {error && (
           <div className="bg-red-100 border border-red-300 text-red-700 px-4 py-3 rounded mb-6 text-sm">

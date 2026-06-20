@@ -3,24 +3,32 @@ import { addRow } from "@/lib/data";
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
-    const file = formData.get("file") as File | null;
+    const body = await request.json();
+    const url: string = body.url || "";
 
-    if (!file) {
-      return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+    if (!url) {
+      return NextResponse.json({ error: "No URL provided" }, { status: 400 });
     }
 
-    const text = await file.text();
-    const lines = text.split(/\r?\n/).filter(Boolean);
-
-    if (lines.length < 2) {
+    const res = await fetch(url);
+    if (!res.ok) {
       return NextResponse.json(
-        { error: "CSV must have a header row and at least one data row" },
+        { error: "Failed to fetch sheet. Make sure it's published to the web." },
         { status: 400 }
       );
     }
 
-    const parseCSVLine = (line: string): string[] => {
+    const text = await res.text();
+    const lines = text.split(/\r?\n/).filter(Boolean);
+
+    if (lines.length < 2) {
+      return NextResponse.json(
+        { error: "Sheet appears to be empty or not published as CSV" },
+        { status: 400 }
+      );
+    }
+
+    const parseLine = (line: string): string[] => {
       const result: string[] = [];
       let current = "";
       let inQuotes = false;
@@ -44,35 +52,29 @@ export async function POST(request: NextRequest) {
       return result;
     };
 
-    const headers = parseCSVLine(lines[0]).map((h) =>
+    const headers = parseLine(lines[0]).map((h) =>
       h.toLowerCase().replace(/[^a-z]/g, "")
     );
     const expectedHeaders = [
-      "date",
-      "user",
-      "model",
-      "serialnumber",
-      "issue",
-      "status",
-      "notes",
+      "date", "user", "model", "serialnumber", "issue", "status", "notes",
     ];
 
     const headerMap = expectedHeaders.map((eh) => headers.indexOf(eh));
     if (headerMap.some((i) => i === -1)) {
       return NextResponse.json(
-        {
-          error: `CSV must have columns: Date, User, Model, Serial Number, Issue, Status, Notes`,
-        },
+        { error: "Sheet columns must be: Date, User, Model, Serial Number, Issue, Status, Notes" },
         { status: 400 }
       );
     }
 
     let imported = 0;
+    let skipped = 0;
     for (let i = 1; i < lines.length; i++) {
-      const cols = parseCSVLine(lines[i]);
+      const cols = parseLine(lines[i]);
       if (cols.length < 7) continue;
 
       const getCol = (idx: number) => (cols[headerMap[idx]] || "").trim();
+      if (!getCol(0)) { skipped++; continue; }
 
       await addRow({
         date: getCol(0),
@@ -86,10 +88,10 @@ export async function POST(request: NextRequest) {
       imported++;
     }
 
-    return NextResponse.json({ success: true, imported });
+    return NextResponse.json({ success: true, imported, skipped });
   } catch {
     return NextResponse.json(
-      { error: "Failed to import CSV. Check file format." },
+      { error: "Failed to import from sheet. Check the URL and try again." },
       { status: 500 }
     );
   }

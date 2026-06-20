@@ -1,20 +1,14 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { getAllRows } from "@/lib/data";
 
 export async function GET() {
-  const repairs = await prisma.repair.findMany({ orderBy: { createdAt: "desc" } });
+  const repairs = await getAllRows();
 
   const headers = ["Date", "User", "Model", "Serial Number", "Issue", "Status", "Notes"];
   const rows = repairs.map((r) =>
-    [
-      r.date,
-      r.user,
-      r.model,
-      r.serial,
-      r.issue,
-      r.status,
-      r.notes.replace(/"/g, '""'),
-    ].map((v) => `"${v}"`).join(",")
+    [r.date, r.user, r.model, r.serial, r.issue, r.status, r.notes.replace(/"/g, '""')]
+      .map((v) => `"${v}"`)
+      .join(",")
   );
 
   const csv = [headers.join(","), ...rows].join("\r\n");
